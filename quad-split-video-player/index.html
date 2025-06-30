@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quad Split Video Player</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #1a1a1a;
+            color: white;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .settings {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .setting-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: inline-block;
+            width: 120px;
+            font-weight: bold;
+        }
+
+        input[type="number"], input[type="file"] {
+            padding: 8px;
+            border: 1px solid #555;
+            border-radius: 4px;
+            background: #333;
+            color: white;
+            margin-right: 10px;
+        }
+
+        input[type="range"] {
+            background: #333;
+            border-radius: 4px;
+            margin: 0 10px;
+        }
+
+        button {
+            padding: 10px 20px;
+            background: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+
+        button:hover {
+            background: #0052a3;
+        }
+
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        .player-container {
+            position: relative;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+
+        #quadCanvas {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        #originalVideo {
+            display: none;
+        }
+
+        .controls {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .time-display {
+            font-family: monospace;
+            background: #333;
+            padding: 5px 10px;
+            border-radius: 4px;
+        }
+
+        .progress-container {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #555;
+            border-radius: 3px;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #0066cc;
+            border-radius: 3px;
+            width: 0%;
+            transition: width 0.1s;
+        }
+
+        .quarter-label {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 5px 10px;
+            font-size: 12px;
+            border-radius: 4px;
+        }
+
+        .quarter-label.top-left { top: 10px; left: 10px; }
+        .quarter-label.top-right { top: 10px; left: 50%; margin-left: 10px; }
+        .quarter-label.bottom-left { top: 50%; margin-top: 10px; left: 10px; }
+        .quarter-label.bottom-right { top: 50%; margin-top: 10px; left: 50%; margin-left: 10px; }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            flex-direction: column;
+        }
+
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 5px solid #333;
+            border-top: 5px solid #0066cc;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            color: white;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎬 Quad Split Video Player</h1>
+
+        <!-- ローディングオーバーレイ -->
+        <div id="loadingOverlay" class="loading-overlay" style="display: none;">
+            <div class="loading-spinner"></div>
+            <div class="loading-text">動画を読み込み中...</div>
+        </div>
+
+        <div class="settings">
+            <div class="setting-group">
+                <label>動画ファイル:</label>
+                <input type="file" id="videoFile" accept="video/*">
+            </div>
+            <div class="setting-group">
+                <label>左側トリミング:</label>
+                <input type="number" id="leftCrop" value="220" min="0" max="500">px
+                <label style="width: auto; margin-left: 20px;">右側トリミング:</label>
+                <input type="number" id="rightCrop" value="160" min="0" max="500">px
+            </div>
+        </div>
+
+        <div class="player-container">
+            <video id="originalVideo" controls></video>
+            <canvas id="quadCanvas"></canvas>
+
+            <!-- 象限ラベル -->
+            <div class="quarter-label top-left">0% - 25%</div>
+            <div class="quarter-label top-right">25% - 50%</div>
+            <div class="quarter-label bottom-left">50% - 75%</div>
+            <div class="quarter-label bottom-right">75% - 100%</div>
+        </div>
+
+        <div class="controls">
+            <button onclick="togglePlay()" id="playBtn">▶️ 再生</button>
+            <button onclick="resetTime()">⏮️ 最初から</button>
+            <div class="time-display">
+                <span id="currentTime">00:00</span> / <span id="duration">00:00</span>
+            </div>
+            <div class="progress-container">
+                <div class="progress-bar" onclick="seekTo(event)">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+            </div>
+            <span>音量: </span>
+            <input type="range" id="volumeSlider" min="0" max="100" value="100" onchange="changeVolume()" style="width: 100px;">
+            <span id="volumeDisplay">100%</span>
+        </div>
+
+        <div style="background: #2a2a2a; padding: 15px; border-radius: 8px; font-size: 14px;">
+            <p id="videoInfo"></p>
+        </div>
+    </div>
+
+    <script>
+        let video, canvas, ctx;
+        let quadVideos = []; // 4つの動画エレメント
+        let animationId;
+        let videoDuration = 0;
+        let leftCrop = 220;
+        let rightCrop = 160;
+        let videoUrl = '';
+        let isVideoLoaded = false;
+
+        function init() {
+            video = document.getElementById('originalVideo');
+            canvas = document.getElementById('quadCanvas');
+            ctx = canvas.getContext('2d');
+
+            video.addEventListener('loadedmetadata', onVideoLoaded);
+            video.addEventListener('timeupdate', updateProgress);
+            video.addEventListener('ended', onVideoEnded);
+
+            // ファイル選択時に自動読み込み
+            document.getElementById('videoFile').addEventListener('change', loadVideo);
+
+            // 4つの動画エレメントを作成（4分割用）
+            for (let i = 0; i < 4; i++) {
+                const quadVideo = document.createElement('video');
+                quadVideo.style.display = 'none';
+                document.body.appendChild(quadVideo);
+                quadVideos.push(quadVideo);
+            }
+
+            // 初期状態では操作不可
+            setControlsEnabled(false);
+        }
+
+        function setControlsEnabled(enabled) {
+            document.getElementById('playBtn').disabled = !enabled;
+            document.querySelector('button[onclick="resetTime()"]').disabled = !enabled;
+            document.getElementById('volumeSlider').disabled = !enabled;
+        }
+
+        function showLoading() {
+            document.getElementById('loadingOverlay').style.display = 'flex';
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingOverlay').style.display = 'none';
+        }
+
+        function loadVideo() {
+            const fileInput = document.getElementById('videoFile');
+            const file = fileInput.files[0];
+
+            if (!file) return;
+
+            showLoading();
+            setControlsEnabled(false);
+
+            if (videoUrl) {
+                URL.revokeObjectURL(videoUrl);
+            }
+
+            videoUrl = URL.createObjectURL(file);
+            video.src = videoUrl;
+
+            // トリミング値を更新
+            leftCrop = parseInt(document.getElementById('leftCrop').value) || 0;
+            rightCrop = parseInt(document.getElementById('rightCrop').value) || 0;
+        }
+
+        function onVideoLoaded() {
+            videoDuration = video.duration;
+            const videoWidth = video.videoWidth;
+            const videoHeight = video.videoHeight;
+
+            // クロップ後のサイズを計算
+            const croppedWidth = videoWidth - leftCrop - rightCrop;
+            const croppedHeight = videoHeight;
+
+            // キャンバスサイズを設定
+            canvas.width = croppedWidth;
+            canvas.height = croppedHeight;
+
+            // 4つの動画エレメントを設定
+            const quarterDuration = videoDuration / 4;
+            let loadedCount = 0;
+
+            for (let i = 0; i < 4; i++) {
+                quadVideos[i].src = videoUrl;
+                quadVideos[i].addEventListener('loadedmetadata', () => {
+                    quadVideos[i].currentTime = i * quarterDuration;
+                    loadedCount++;
+
+                    // 全ての動画が読み込まれたら完了
+                    if (loadedCount === 4) {
+                        finishLoading();
+                    }
+                });
+            }
+
+            // 動画情報を表示
+            document.getElementById('videoInfo').innerHTML = `
+                📹 元動画: ${videoWidth} x ${videoHeight}<br>
+                ✂️ クロップ後: ${croppedWidth} x ${croppedHeight}<br>
+                ⏱️ 動画の長さ: ${formatTime(videoDuration)}<br>
+                👀 確認時間: ${formatTime(quarterDuration)}
+            `;
+
+            document.getElementById('duration').textContent = formatTime(quarterDuration);
+        }
+
+        function finishLoading() {
+            hideLoading();
+            setControlsEnabled(true);
+            isVideoLoaded = true;
+
+            // メイン動画はタイマー用のみでミュート
+            video.muted = true;
+
+            // 初期音量を設定（象限動画のみ）
+            changeVolume();
+
+            // 4分割モードで開始
+            video.style.display = 'none';
+            canvas.style.display = 'block';
+            startQuadRendering();
+        }
+
+        function startQuadRendering() {
+            function render() {
+                if (!isVideoLoaded) return;
+
+                drawQuadVideo();
+                animationId = requestAnimationFrame(render);
+            }
+            render();
+        }
+
+        function stopQuadRendering() {
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+            }
+        }
+
+        function drawQuadVideo() {
+            if (!video.videoWidth || !video.videoHeight) return;
+
+            const videoWidth = video.videoWidth;
+            const videoHeight = video.videoHeight;
+            const croppedWidth = videoWidth - leftCrop - rightCrop;
+            const croppedHeight = videoHeight;
+
+            // キャンバスをクリア
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const quarterW = croppedWidth / 2;
+            const quarterH = croppedHeight / 2;
+
+            // 各象限を描画
+            for (let i = 0; i < 4; i++) {
+                const quadVideo = quadVideos[i];
+                if (quadVideo.readyState >= 2) { // HAVE_CURRENT_DATA
+                    // 描画位置を計算
+                    const col = i % 2;
+                    const row = Math.floor(i / 2);
+                    const dx = col * quarterW;
+                    const dy = row * quarterH;
+
+                    // クロップして描画
+                    ctx.drawImage(
+                        quadVideo,
+                        leftCrop, 0, croppedWidth, croppedHeight,  // ソース（クロップ）
+                        dx, dy, quarterW, quarterH  // デスティネーション
+                    );
+                }
+            }
+        }
+
+        function togglePlay() {
+            if (!isVideoLoaded) return;
+
+            const maxTime = videoDuration / 4;
+
+            if (video.paused) {
+                // 時間制限に達している場合は再生しない
+                if (video.currentTime >= maxTime) {
+                    return;
+                }
+
+                video.play();
+                document.getElementById('playBtn').textContent = '⏸️ 停止';
+
+                // 各象限動画の再生前に時間と音量をチェック（象限動画のみ）
+                const currentVolume = document.getElementById('volumeSlider').value / 100;
+                const quarterDuration = videoDuration / 4;
+
+                quadVideos.forEach((v, i) => {
+                    const expectedTime = (i * quarterDuration) + video.currentTime;
+
+                    // 音量を設定
+                    v.volume = currentVolume;
+
+                    // 時間を同期
+                    v.currentTime = expectedTime;
+
+                    // 時間が制限内の場合のみ再生
+                    if (video.currentTime < maxTime) {
+                        v.play();
+                    }
+                });
+
+                startQuadRendering();
+            } else {
+                video.pause();
+                document.getElementById('playBtn').textContent = '▶️ 再生';
+
+                quadVideos.forEach(v => v.pause());
+            }
+        }
+
+        function resetTime() {
+            if (!isVideoLoaded) return;
+
+            video.currentTime = 0;
+
+            const quarterDuration = videoDuration / 4;
+            const currentVolume = document.getElementById('volumeSlider').value / 100;
+
+            quadVideos.forEach((v, i) => {
+                v.currentTime = i * quarterDuration;
+                v.volume = currentVolume;
+            });
+        }
+
+        function updateProgress() {
+            if (!isVideoLoaded) return;
+
+            // 4分割モードでは最短の長さ（1/4）で進捗を表示
+            const maxTime = videoDuration / 4;
+            const currentTime = Math.min(video.currentTime, maxTime);
+            const progress = (currentTime / maxTime) * 100;
+
+            // 各象限動画の時間を同期
+            const quarterDuration = videoDuration / 4;
+            quadVideos.forEach((v, i) => {
+                if (!v.paused) {
+                    const expectedTime = (i * quarterDuration) + currentTime;
+                    // 時間のずれが大きい場合のみ修正
+                    if (Math.abs(v.currentTime - expectedTime) > 0.5) {
+                        v.currentTime = expectedTime;
+                    }
+                }
+            });
+
+            // 進行時間が最大時間に達したら全ての象限動画を停止
+            if (video.currentTime >= maxTime) {
+                quadVideos.forEach(v => {
+                    if (!v.paused) {
+                        v.pause();
+                    }
+                });
+
+                // メイン動画も停止
+                if (!video.paused) {
+                    video.pause();
+                    document.getElementById('playBtn').textContent = '▶️ 再生';
+                }
+            }
+
+            document.getElementById('progressFill').style.width = progress + '%';
+            document.getElementById('currentTime').textContent = formatTime(currentTime);
+        }
+
+        function seekTo(event) {
+            if (!isVideoLoaded) return;
+
+            const progressBar = event.currentTarget;
+            const rect = progressBar.getBoundingClientRect();
+            const clickX = event.clientX - rect.left;
+            const percentage = clickX / rect.width;
+
+            const targetTime = percentage * (videoDuration / 4);
+            const quarterDuration = videoDuration / 4;
+
+            video.currentTime = targetTime;
+
+            // 各象限の動画時間を設定し、音量も再適用（象限動画のみ）
+            const currentVolume = document.getElementById('volumeSlider').value / 100;
+            quadVideos.forEach((v, i) => {
+                v.currentTime = (i * quarterDuration) + targetTime;
+                v.volume = currentVolume;
+            });
+        }
+
+        function changeVolume() {
+            if (!isVideoLoaded) return;
+
+            const volume = document.getElementById('volumeSlider').value / 100;
+
+            // 象限動画のみに音量を適用（メイン動画はミュート）
+            quadVideos.forEach(v => {
+                v.volume = volume;
+            });
+
+            document.getElementById('volumeDisplay').textContent = Math.round(volume * 100) + '%';
+        }
+
+        function onVideoEnded() {
+            document.getElementById('playBtn').textContent = '▶️ 再生';
+
+            // 全ての象限動画を停止
+            quadVideos.forEach(v => {
+                if (!v.paused) {
+                    v.pause();
+                }
+            });
+        }
+
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        // 初期化
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>
